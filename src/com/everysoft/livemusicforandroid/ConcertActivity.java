@@ -10,7 +10,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
 import android.database.sqlite.SQLiteStatement;
 import android.media.AudioManager;
 import android.os.Bundle;
@@ -25,8 +24,8 @@ import android.widget.Toast;
 
 public class ConcertActivity extends ListActivity {
 	
-	SQLiteDatabase concertsReadDb;
-	String mCollection;
+	SQLiteDatabase mDb;
+	String mBandId;
 	ProgressDialog mDialog;
 	Cursor mCursor;
 	SimpleCursorAdapter mAdapter;
@@ -39,9 +38,9 @@ public class ConcertActivity extends ListActivity {
 		super.onCreate(savedInstanceState);
 		this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
 		this.setContentView(R.layout.list);
-		mCollection = getIntent().getExtras().getString("collection");
-		concertsReadDb = new ConcertsDbOpenHelper(this).getReadableDatabase();
-		mCursor = concertsReadDb.query("concerts", new String[] {"_id","title","rating"}, "collection=?", new String[]{ mCollection }, null, null, "_id"); // sorted on insert
+		mBandId = getIntent().getExtras().getString("band_id");
+		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
+		mCursor = mDb.query("concerts", new String[] {"_id","title","rating"}, "band_id=?", new String[]{ mBandId }, null, null, "_id"); // sorted on insert
 		mAdapter = new SimpleCursorAdapter(this, android.R.layout.simple_list_item_2, mCursor, new String[] {"title","rating"}, new int[] {android.R.id.text1, android.R.id.text2});
 		this.setListAdapter(mAdapter);
 		this.getListView().setFastScrollEnabled(true);
@@ -52,7 +51,7 @@ public class ConcertActivity extends ListActivity {
 	@Override
 	public void onDestroy() {
 		mCursor.close();
-		concertsReadDb.close();
+		mDb.close();
 		super.onDestroy();
 	}
 	
@@ -80,28 +79,15 @@ public class ConcertActivity extends ListActivity {
 	
 	@Override
 	protected void onListItemClick(ListView l, View v, int position, long id) {
-		Cursor c = concertsReadDb.query("concerts", new String[]{ "concert" }, "_id=?", new String[]{ ""+id }, null, null, null);
-		if (c.isAfterLast()) {
-			Toast.makeText(this, "Unavailable.", Toast.LENGTH_SHORT).show();
-		}
-		else {
-			c.moveToFirst();
-			String concert = c.getString(0);
-			
-			Intent playerActivityIntent = new Intent(this, PlayerActivity.class);
-			playerActivityIntent.putExtra("concert", concert);
-			this.startActivity(playerActivityIntent);
-		}
-		c.close();
+		Intent playerActivityIntent = new Intent(this, PlayerActivity.class);
+		playerActivityIntent.putExtra("concert_id", ""+id);
+		this.startActivity(playerActivityIntent);
 	}
 	
 	public void refreshIfTime() {
-		SQLiteDatabase concertsDb = new ConcertsDbOpenHelper(this).getWritableDatabase();
-		concertsDb.delete("concerts", "collection=? AND updated < datetime('now','-1 day')", new String[] { mCollection });
-		concertsDb.close();
-		
-		Cursor c = concertsReadDb.rawQuery("SELECT * FROM concerts WHERE collection=? LIMIT 1", new String[] { mCollection });
-		if (c.isAfterLast()) {
+		Cursor c = mDb.query("concerts", new String[] { "count(*)" }, "band_id=? AND updated > datetime('now','-1 day')", new String[] { mBandId }, null, null, null);
+		c.moveToFirst();
+		if (c.getInt(0) == 0) {
 			refreshConcerts();
 		}
 		c.close();
@@ -119,16 +105,19 @@ public class ConcertActivity extends ListActivity {
 	}
 	
 	private void getConcertsFromJSON() {
-		SQLiteDatabase concertsDb = new ConcertsDbOpenHelper(this).getWritableDatabase();
-		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q=collection%3A%28"+mCollection+"%29+AND+mediatype%3A%28etree%29&fl[]=identifier&fl[]=avg_rating&fl[]=title&sort[]=date+desc&rows=50000&output=json");
-		SQLiteStatement stmt = concertsDb.compileStatement("INSERT INTO concerts (collection,concert,title,rating) VALUES (?, ?, ?, ?)");
-		concertsDb.beginTransaction();
-		concertsDb.delete("concerts", "collection=?", new String[]{ mCollection });
+		Cursor c = mDb.query("bands", new String[] { "identifier" }, "_id=?", new String[] { mBandId }, null, null, null);
+		c.moveToFirst();
+		String collection = c.getString(0);
+		c.close();
+		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q=collection%3A%28"+collection+"%29+AND+mediatype%3A%28etree%29&fl[]=identifier&fl[]=avg_rating&fl[]=title&sort[]=date+desc&rows=50000&output=json");
+		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO concerts (band_id,identifier,title,rating) VALUES (?, ?, ?, ?)");
+		mDb.beginTransaction();
+		mDb.delete("concerts", "band_id=?", new String[]{ mBandId });
 		try {
 			JSONArray concerts = retriever.getJSON().getJSONObject("response").getJSONArray("docs");
 			for (int i=0; i<concerts.length(); i++) {
 				JSONObject concert = concerts.getJSONObject(i);
-				stmt.bindString(1, mCollection);
+				stmt.bindString(1, mBandId);
 				stmt.bindString(2, concert.getString("identifier"));
 				stmt.bindString(3, concert.getString("title"));
 				if (concert.has("avg_rating")) {
@@ -150,14 +139,13 @@ public class ConcertActivity extends ListActivity {
 				}
 				stmt.execute();
 			}
-			concertsDb.setTransactionSuccessful();
+			mDb.setTransactionSuccessful();
 			mDeepError = null;
 		} catch (Exception e) {
 			mDeepError = "Cannot retrieve data from archive.org.  Check your connection!";
 			e.printStackTrace();
 		}
-		concertsDb.endTransaction();
-		concertsDb.close();
+		mDb.endTransaction();
 	}
 	
 	final Runnable mFinishRefreshConcerts = new Runnable() {
@@ -172,25 +160,4 @@ public class ConcertActivity extends ListActivity {
             mDialog.dismiss();
         }
     };
-}
-
-class ConcertsDbOpenHelper extends SQLiteOpenHelper {
-    private static final String DATABASE_NAME = "concerts";
-    private static final int DATABASE_VERSION = 2;
-    private static final String CONCERTS_TABLE_NAME = "concerts";
-    private static final String CONCERTS_TABLE_CREATE =
-    	"CREATE TABLE " + CONCERTS_TABLE_NAME + " (_id INTEGER PRIMARY KEY AUTOINCREMENT, collection TEXT NOT NULL, concert TEXT NOT NULL, title TEXT NOT NULL, rating STRING NOT NULL, updated TIMESTAMP);";
-
-    ConcertsDbOpenHelper(Context context) {
-        super(context, DATABASE_NAME, null, DATABASE_VERSION);
-    }
-
-    @Override
-    public void onCreate(SQLiteDatabase db) {
-        db.execSQL(CONCERTS_TABLE_CREATE);
-    }
-
-	@Override
-	public void onUpgrade(SQLiteDatabase db, int ver1, int ver2) {
-	}
 }
