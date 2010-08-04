@@ -8,10 +8,8 @@ import android.app.ListActivity;
 import android.app.ProgressDialog;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
 import android.database.sqlite.SQLiteStatement;
 import android.media.AudioManager;
 import android.os.Bundle;
@@ -28,7 +26,7 @@ import android.widget.Toast;
 
 public class BandActivity extends ListActivity {
 	
-	SQLiteDatabase bandsReadDb;
+	SQLiteDatabase mDb;
 	ProgressDialog mDialog;
 	Cursor mCursor;
 	SimpleCursorAdapter mAdapter;
@@ -41,8 +39,8 @@ public class BandActivity extends ListActivity {
 		super.onCreate(savedInstanceState);
 		this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
 		this.setContentView(R.layout.list);
-		bandsReadDb = new BandsDbOpenHelper(this).getReadableDatabase();
-		mCursor = bandsReadDb.query("bands", new String[] {"_id","title"}, null, null, null, null, "title");
+		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
+		mCursor = mDb.query("bands", new String[] {"_id","title"}, null, null, null, null, "title");
 		mAdapter = new BandsAdapter(this, android.R.layout.simple_list_item_1, mCursor, new String[] {"title"}, new int[] {android.R.id.text1});
 		this.setListAdapter(mAdapter);
 		this.getListView().setFastScrollEnabled(true);
@@ -53,7 +51,7 @@ public class BandActivity extends ListActivity {
 	@Override
 	public void onDestroy() {
 		mCursor.close();
-		bandsReadDb.close();
+		mDb.close();
 		super.onDestroy();
 	}
 
@@ -81,30 +79,18 @@ public class BandActivity extends ListActivity {
 	
 	@Override
 	protected void onListItemClick(ListView l, View v, int position, long id) {
-		Cursor c = bandsReadDb.query("bands", new String[]{ "collection" }, "_id=?", new String[]{ ""+id }, null, null, null);
-		if (c.isAfterLast()) {
-			Toast.makeText(this, "Unavailable.", Toast.LENGTH_SHORT);
-		}
-		else {
-			c.moveToFirst();
-			String collection = c.getString(0);
-			
-			Intent concertActivityIntent = new Intent(this, ConcertActivity.class);
-			concertActivityIntent.putExtra("collection", collection);
-			this.startActivity(concertActivityIntent);
-		}
-		c.close();
+		Intent concertActivityIntent = new Intent(this, ConcertActivity.class);
+		concertActivityIntent.putExtra("band_id", ""+id);
+		this.startActivity(concertActivityIntent);
 	}
 	
 	public void refreshIfTime() {
-		SharedPreferences pref = this.getPreferences(MODE_PRIVATE);
-		Long now = System.currentTimeMillis();
-		if (now - pref.getLong("refreshed", 0) > 86400000) {
-			SharedPreferences.Editor e = pref.edit();
-			e.putLong("refreshed", now);
-			e.commit();
+		Cursor c = mDb.query("bands", new String[] { "count(*)" }, "updated > datetime('now','-1 day')", null, null, null, null);
+		c.moveToFirst();
+		if (c.getInt(0) == 0) {
 			refreshBands();
 		}
+		c.close();
 	}
 	
 	public void refreshBands() {
@@ -119,11 +105,10 @@ public class BandActivity extends ListActivity {
 	}
 	
 	private void getBandsFromJSON() {
-		SQLiteDatabase bandsDb = new BandsDbOpenHelper(this).getWritableDatabase();
 		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q=collection%3A%28etree%29+AND+mediatype%3A%28collection%29&fl[]=identifier&fl[]=title&rows=10000&output=json");
-		SQLiteStatement stmt = bandsDb.compileStatement("INSERT INTO bands (collection,title) VALUES (?, ?)");
-		bandsDb.beginTransaction();
-		bandsDb.delete("bands", null, null);
+		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO bands (identifier,title) VALUES (?, ?)");
+		mDb.beginTransaction();
+		mDb.delete("bands", null, null);
 		try {
 			JSONArray collections = retriever.getJSON().getJSONObject("response").getJSONArray("docs");
 			for (int i=0; i<collections.length(); i++) {
@@ -132,14 +117,13 @@ public class BandActivity extends ListActivity {
 				stmt.bindString(2, collection.getString("title"));
 				stmt.execute();
 			}
-			bandsDb.setTransactionSuccessful();
+			mDb.setTransactionSuccessful();
 			mDeepError = null;
 		} catch (Exception e) {
 			mDeepError = "Cannot retrieve data from archive.org.  Check your connection!";
 			e.printStackTrace();
 		}
-		bandsDb.endTransaction();
-		bandsDb.close();
+		mDb.endTransaction();
 	}
 	
 	final Runnable mFinishRefreshBands = new Runnable() {
@@ -154,27 +138,6 @@ public class BandActivity extends ListActivity {
             mDialog.dismiss();
         }
     };
-}
-
-class BandsDbOpenHelper extends SQLiteOpenHelper {
-    private static final String DATABASE_NAME = "bands";
-    private static final int DATABASE_VERSION = 2;
-    private static final String BANDS_TABLE_NAME = "bands";
-    private static final String BANDS_TABLE_CREATE =
-    	"CREATE TABLE " + BANDS_TABLE_NAME + " (_id INTEGER PRIMARY KEY AUTOINCREMENT, collection TEXT NOT NULL, title TEXT NOT NULL);";
-
-    BandsDbOpenHelper(Context context) {
-        super(context, DATABASE_NAME, null, DATABASE_VERSION);
-    }
-
-    @Override
-    public void onCreate(SQLiteDatabase db) {
-        db.execSQL(BANDS_TABLE_CREATE);
-    }
-
-	@Override
-	public void onUpgrade(SQLiteDatabase db, int ver1, int ver2) {
-	}
 }
 
 class BandsAdapter extends SimpleCursorAdapter implements SectionIndexer{

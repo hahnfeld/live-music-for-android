@@ -2,59 +2,66 @@ package com.everysoft.livemusicforandroid;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
-import org.apache.http.ParseException;
-import org.apache.http.client.ClientProtocolException;
 import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
 
 import android.app.AlertDialog;
 import android.app.ListActivity;
+import android.app.ProgressDialog;
+import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteStatement;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.MediaPlayer.OnCompletionListener;
 import android.media.MediaPlayer.OnPreparedListener;
 import android.os.Bundle;
+import android.os.Handler;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.ListView;
 import android.widget.MediaController;
-import android.widget.SimpleAdapter;
+import android.widget.SimpleCursorAdapter;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.widget.MediaController.MediaPlayerControl;
 
 public class PlayerActivity extends ListActivity implements OnPreparedListener, OnCompletionListener {
-	List<Map<String, Object>> mSongData;
-	String mConcert;
+	
+	SQLiteDatabase mDb;
+	String mConcertId;
+	ProgressDialog mDialog;
+	Cursor mCursor;
+	SimpleCursorAdapter mAdapter;
+	final Handler mHandler = new Handler();
+	String mDeepError;
+	Context mContext = this;
+	
 	MediaPlayer mMediaPlayer;
 	MPlayerControl mMediaPlayerControl;
 	MediaController mMediaController;
-	int mCurPosition;
+	
+	int mSongCount;
+	int mCurrentSongPosition;
 
-	/** Called when the activity is first created. */
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
-		mConcert = getIntent().getExtras().getString("concert");
 		this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
-		setContentView(R.layout.player_main);
-		// Initialize the current position
-		mCurPosition = 0;
-
-		// ListView
-		mSongData = new ArrayList<Map<String, Object>>();
-		populateSongData();
-		SimpleAdapter adapter = new SimpleAdapter(this, mSongData,
-				R.layout.player_row,
-				new String[] { "ICON", "TITLE", "TIME" }, new int[] { R.id.icon, R.id.firstLine, R.id.secondLine });
-		setListAdapter(adapter);
+		this.setContentView(R.layout.player_main);
+		mConcertId = getIntent().getExtras().getString("concert_id");
+		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
+		
+		mCursor = mDb.query("songs", new String[] {"_id","identifier","title","song_length"}, "concert_id=?", new String[]{ mConcertId }, null, null, "identifier");
+		mSongCount = mCursor.getCount();
+		mCurrentSongPosition = 0;
+		
+		mAdapter = new SimpleCursorAdapter(this, android.R.layout.simple_list_item_2, mCursor, new String[] {"title","song_length"}, new int[] {android.R.id.text1, android.R.id.text2});
+		this.setListAdapter(mAdapter);
 
 		// MediaPlayer
 		mMediaPlayer = new MediaPlayer();
@@ -83,19 +90,31 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 					}
 				});
 		mMediaController.setEnabled(false);
+		
+		// Title
+        TextView tv = (TextView) findViewById(R.id.albumtitle);
+        Cursor c = mDb.query("concerts", new String[]{ "title" }, "_id=?", new String[]{ mConcertId }, null, null, null);
+		c.moveToFirst();
+        tv.setText(c.getString(0));
+		c.close();
+        
+		refreshIfTime();
 	}
 	
 	@Override
 	public void onDestroy() {
+		mCursor.close();
+		mDb.close();
+		
 		if (mMediaPlayer.isPlaying()) {
 			mMediaPlayer.stop();
 		}
-		this.mMediaPlayerControl.killMediaPlayer();
+		this.mMediaPlayerControl.killMediaPlayer(); // TODO: ugly!
 		mMediaPlayer.release();
 		mMediaPlayer = null;
 		super.onDestroy();
 	}
-
+	
 	@Override
 	public boolean onCreateOptionsMenu(Menu menu) {
 	    MenuInflater inflater = getMenuInflater();
@@ -111,9 +130,123 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 			builder.setMessage(R.string.about_message);
 			builder.create().show();
 			return true;
+		case R.id.refresh:
+			refreshSongs();
 		default:
 	        return super.onOptionsItemSelected(item);
 		}
+	}
+	
+	@Override
+	protected void onListItemClick(ListView l, View v, int position, long id) {
+		mCurrentSongPosition = position;
+		playCurrentSong();
+	}
+	
+	public void refreshIfTime() {
+		Cursor c = mDb.query("songs", new String[] { "count(*)" }, "concert_id=? AND updated > datetime('now','-1 day')", new String[] { mConcertId }, null, null, null);
+		c.moveToFirst();
+		if (c.getInt(0) == 0) {
+			refreshSongs();
+		}
+		c.close();
+	}
+	
+	public void refreshSongs() {
+		mDialog = ProgressDialog.show(this, "", "Updating. Please wait...", true);
+        Thread t = new Thread() {
+            public void run() {
+                getSongsFromJSON();
+                mHandler.post(mFinishRefreshSongs);
+            }
+        };
+        t.start();
+	}
+	
+	private void getSongsFromJSON() {
+		Cursor c = mDb.query("concerts", new String[] { "identifier" }, "_id=?", new String[] { mConcertId }, null, null, null);
+		c.moveToFirst();
+		String concert = c.getString(0);
+		c.close();
+		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/details/"+concert+"?output=json");
+		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO songs (concert_id,identifier,title,song_length) VALUES (?, ?, ?, ?)");
+		mDb.beginTransaction();
+		mDb.delete("songs", "concert_id=?", new String[]{ mConcertId });
+		try {
+			JSONObject response = retriever.getJSON();
+			JSONObject metadata = response.getJSONObject("metadata");
+			JSONObject files = response.getJSONObject("files");
+
+			JSONArray names = files.names();
+			for (int i = 0; i<names.length(); i++) {
+				String identifier = names.getString(i);
+				JSONObject fileInfo = files.getJSONObject(identifier);
+
+				if (! fileInfo.has("format") || !fileInfo.getString("format").equals("VBR MP3")) {
+					continue;
+				}
+
+				stmt.bindString(1, mConcertId);
+				stmt.bindString(2, metadata.getJSONArray("identifier").getString(0) + identifier);
+				stmt.bindString(3, fileInfo.has("title") ? fileInfo.getString("title") : "Unknown Title");
+				stmt.bindString(4, fileInfo.has("length") ? fileInfo.getString("length") : "Unknown Length");
+				stmt.execute();
+			}
+			
+			
+			
+			
+			mDb.setTransactionSuccessful();
+			mDeepError = null;
+		} catch (Exception e) {
+			mDeepError = "Cannot retrieve data from archive.org.  Check your connection!";
+			e.printStackTrace();
+		}
+		mDb.endTransaction();
+	}
+	
+	final Runnable mFinishRefreshSongs = new Runnable() {
+        public void run() {
+        	if (mDeepError != null) {
+        		Toast.makeText(mContext, mDeepError, Toast.LENGTH_LONG).show();
+        	}
+        	else {
+        		mCursor.requery();
+        		mAdapter.notifyDataSetChanged();
+        	}
+            mDialog.dismiss();
+        }
+    };
+    
+	private void playCurrentSong() {
+		if (mMediaPlayer.isPlaying()) {
+			mMediaPlayer.stop();
+		}
+		mMediaPlayer.reset();
+		// TODO: set icons
+		if (mCursor.moveToPosition(mCurrentSongPosition)) {
+			try {
+				mMediaPlayer.setDataSource("http://www.archive.org/download/" + mCursor.getString(1));
+				mMediaPlayer.prepareAsync();
+			} catch (IllegalArgumentException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (IllegalStateException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+	}
+	
+	@Override
+	public void onPrepared(MediaPlayer mp) {
+		mMediaPlayer.start();
+		mMediaController.setEnabled(true);
+		setShowing(true);
+		mMediaController.show(); // start updating progress bar			
 	}
 	
 	// A hack to work around an android bug which doesn't recognize the mediacontroller
@@ -137,120 +270,22 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 			e.printStackTrace();
 		}
 	}
-
-	private void populateSongData() {
-		String jsonUrl = "http://www.archive.org/details/"+mConcert+"?output=json";
-		String downloadUrl = "http://www.archive.org/download/"+mConcert;
-
-		try {
-			JSONRetriever retriever = new JSONRetriever(jsonUrl);
-			JSONObject received = retriever.getJSON();
-			
-			TextView tv = (TextView) findViewById(R.id.albumtitle);
-			JSONObject metadata = received.getJSONObject("metadata");
-			if (metadata.has("title")){
-				tv.setText(metadata.getJSONArray("title").getString(0));
-			}
-			else {
-				tv.setText("No Title");
-			}
-
-			JSONObject files = received.getJSONObject("files");
-			JSONArray names = files.names();
-			for (int i = 0; i<names.length(); i++) {
-				Map<String,Object> newSong= new HashMap<String,Object>();
-				String url = names.getString(i);
-				JSONObject fileInfo = files.getJSONObject(url);
-
-				if (! fileInfo.has("format") || !fileInfo.getString("format").equals("VBR MP3")) {
-					continue;
-				}
-
-				newSong.put("TITLE", fileInfo.has("title") ? fileInfo.getString("title") : "Unknown Title");
-				newSong.put("TIME", fileInfo.has("length") ? fileInfo.getString("length") : "Unknown Length");
-				newSong.put("URL", downloadUrl + url);
-				newSong.put("ICON", R.drawable.ic_media_play_off);
-
-				mSongData.add(newSong);
-			}
-		} catch (ParseException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (ClientProtocolException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (JSONException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-	}
-
-	// someone clicks on a list item
-	@Override
-	protected void onListItemClick(ListView l, View v, int position, long id) {
-		mCurPosition = position;
-		playCurrentSong();
-	}
-
-	// play new song
-	private void playCurrentSong() {
-		try {
-			if (mMediaPlayer.isPlaying()) {
-				mMediaPlayer.stop();
-			}
-			
-			// Set icons
-			for (Map<String, Object> sd:mSongData) {
-				sd.put("ICON", R.drawable.ic_media_play_off);
-			}
-			mSongData.get(mCurPosition).put("ICON", android.R.drawable.ic_media_play);
-			((SimpleAdapter) getListAdapter()).notifyDataSetChanged();
-
-			mMediaPlayer.reset();
-			mMediaPlayer.setDataSource((String) mSongData.get(mCurPosition).get("URL"));
-			mMediaPlayer.prepareAsync();
-		} catch (IllegalArgumentException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (IllegalStateException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-	}
-
-	// file is prepared
-	@Override
-	public void onPrepared(MediaPlayer mp) {
-		mMediaPlayer.start();
-		mMediaController.setEnabled(true);
-		setShowing(true);
-		mSongData.get(mCurPosition).put("ICON", android.R.drawable.ic_media_play);
-		((SimpleAdapter) getListAdapter()).notifyDataSetChanged();
-		mMediaController.show(); // start updating progress bar			
-	}
-
-	// file completes playing
+	
 	@Override
 	public void onCompletion(MediaPlayer mp) {
 		next();
 	}
 
 	private void next() {
-		if (mCurPosition < (mSongData.size()-1)) {
-			mCurPosition++;
+		if (mCurrentSongPosition < (mSongCount-1)) {
+			mCurrentSongPosition++;
 			playCurrentSong();
 		}
 	}
 
 	private void prev() {
-		if (mCurPosition > 0) {
-			mCurPosition--;
+		if (mCurrentSongPosition > 0) {
+			mCurrentSongPosition--;
 		}
 		playCurrentSong();
 	}
