@@ -212,6 +212,7 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
         	}
         	else {
         		mCursor.requery();
+        		mSongCount = mCursor.getCount();
         		mAdapter.notifyDataSetChanged();
         	}
             mDialog.dismiss();
