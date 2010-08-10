@@ -9,10 +9,13 @@ import org.json.JSONObject;
 import android.app.AlertDialog;
 import android.app.ListActivity;
 import android.app.ProgressDialog;
+import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteStatement;
+import android.graphics.drawable.AnimationDrawable;
+import android.graphics.drawable.Drawable;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.MediaPlayer.OnCompletionListener;
@@ -23,6 +26,7 @@ import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.MediaController;
 import android.widget.SimpleCursorAdapter;
@@ -30,7 +34,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.MediaController.MediaPlayerControl;
 
-public class PlayerActivity extends ListActivity implements OnPreparedListener, OnCompletionListener {
+public class PlayerActivity extends ListActivity implements OnPreparedListener, OnCompletionListener, SimpleCursorAdapter.ViewBinder {
 	
 	SQLiteDatabase mDb;
 	String mConcertId;
@@ -52,16 +56,19 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 		this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
-		this.setContentView(R.layout.player_main);
+		this.setContentView(R.layout.player_list);
 		mConcertId = getIntent().getExtras().getString("concert_id");
 		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
 		
-		mCursor = mDb.query("songs", new String[] {"_id","identifier","title","song_length"}, "concert_id=?", new String[]{ mConcertId }, null, null, "identifier");
+		// Cursor for the List
+		mCursor = mDb.query("songs s, concerts c, bands b", new String[] {"s._id","s.identifier","s.title AS song_title","s.song_length","s.play_icon","b.title AS band_title"}, "s.concert_id=? AND c._id=s.concert_id AND b._id=c.band_id", new String[]{ mConcertId }, null, null, "s.identifier");
 		mSongCount = mCursor.getCount();
 		mCurrentSongPosition = 0;
 		
-		mAdapter = new SimpleCursorAdapter(this, android.R.layout.simple_list_item_2, mCursor, new String[] {"title","song_length"}, new int[] {android.R.id.text1, android.R.id.text2});
-		this.setListAdapter(mAdapter);
+		// List Adapter
+		mAdapter = new SimpleCursorAdapter(this, R.layout.track_list_item, mCursor, new String[] {"song_title","song_length","play_icon","band_title"}, new int[] {R.id.line1, R.id.duration, R.id.play_indicator, R.id.line2});
+		setListAdapter(mAdapter);
+		mAdapter.setViewBinder(this);
 
 		// MediaPlayer
 		mMediaPlayer = new MediaPlayer();
@@ -76,7 +83,7 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 
 		// MediaController
 		mMediaController = (MediaController) findViewById(R.id.mediacontroller);
-		mMediaController.setAnchorView(findViewById(R.layout.player_main));
+		mMediaController.setAnchorView(findViewById(R.layout.player_list));
 		mMediaController.setMediaPlayer(mMediaPlayerControl);
 		mMediaController.setPrevNextListeners(
 				new View.OnClickListener() {
@@ -98,6 +105,7 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
         tv.setText(c.getString(0));
 		c.close();
         
+		// Refresh
 		refreshIfTime();
 	}
 	
@@ -141,6 +149,46 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 	protected void onListItemClick(ListView l, View v, int position, long id) {
 		mCurrentSongPosition = position;
 		playCurrentSong();
+	}
+
+	@Override
+	public void onPrepared(MediaPlayer mp) {
+		// Icon
+		ContentValues cv = new ContentValues();
+		cv.put("play_icon", R.drawable.indicator_ic_mp_playing_list);
+		mDb.update("songs", cv, "play_icon=?", new String[] { Integer.toString(R.drawable.ic_spinner) });
+		mCursor.requery();
+		mAdapter.notifyDataSetChanged();
+
+		// Play
+		mMediaPlayer.start();
+		mMediaController.setEnabled(true);
+		setShowing(true);
+		mMediaController.show(); // start updating progress bar			
+	}
+
+	@Override
+	public void onCompletion(MediaPlayer mp) {
+		next();
+	}
+	
+	// Handle Animations by Setting Image Backgrounds
+	@Override
+	public boolean setViewValue(View view, Cursor cursor, int columnIndex) {
+		if (view instanceof ImageView) {
+			ImageView imageView = (ImageView) view;
+			String value = cursor.getString(columnIndex);
+			// Note: URIs are *not* supported!
+	        imageView.setBackgroundResource(Integer.parseInt(value));
+	        
+	        Drawable drawable = imageView.getBackground();
+	        if (drawable instanceof AnimationDrawable) {
+	        	AnimationDrawable ad = (AnimationDrawable) drawable;
+	        	ad.start();
+	        }
+	        return true;
+		}
+		return false;
 	}
 	
 	public void refreshIfTime() {
@@ -192,10 +240,6 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 				stmt.bindString(4, fileInfo.has("length") ? fileInfo.getString("length") : "Unknown Length");
 				stmt.execute();
 			}
-			
-			
-			
-			
 			mDb.setTransactionSuccessful();
 			mDeepError = null;
 		} catch (Exception e) {
@@ -224,8 +268,8 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 			mMediaPlayer.stop();
 		}
 		mMediaPlayer.reset();
-		// TODO: set icons
 		if (mCursor.moveToPosition(mCurrentSongPosition)) {
+			// Set Data Source
 			try {
 				mMediaPlayer.setDataSource("http://www.archive.org/download/" + mCursor.getString(1));
 				mMediaPlayer.prepareAsync();
@@ -239,15 +283,16 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
+
+			// Icon
+			ContentValues cv = new ContentValues();
+			cv.put("play_icon", 0);
+			mDb.update("songs", cv, null, null);
+			cv.put("play_icon", R.drawable.ic_spinner);
+			mDb.update("songs", cv, "_id=?", new String[] { mCursor.getString(0) });
+			mCursor.requery();
+			mAdapter.notifyDataSetChanged();
 		}
-	}
-	
-	@Override
-	public void onPrepared(MediaPlayer mp) {
-		mMediaPlayer.start();
-		mMediaController.setEnabled(true);
-		setShowing(true);
-		mMediaController.show(); // start updating progress bar			
 	}
 	
 	// A hack to work around an android bug which doesn't recognize the mediacontroller
@@ -272,11 +317,6 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 		}
 	}
 	
-	@Override
-	public void onCompletion(MediaPlayer mp) {
-		next();
-	}
-
 	private void next() {
 		if (mCurrentSongPosition < (mSongCount-1)) {
 			mCurrentSongPosition++;

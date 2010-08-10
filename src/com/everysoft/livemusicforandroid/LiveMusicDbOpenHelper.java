@@ -35,6 +35,7 @@ public class LiveMusicDbOpenHelper extends SQLiteOpenHelper {
 				"identifier TEXT NOT NULL," +
 				"title TEXT NOT NULL," +
 				"song_length TEXT NOT NULL," +
+				"play_icon INTEGER NOT NULL DEFAULT 0," +
 				"updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
 				"FOREIGN KEY (concert_id) REFERENCES concerts(_id) ON DELETE CASCADE" +
 			");");
