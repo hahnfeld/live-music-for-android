@@ -40,7 +40,7 @@ public class BandActivity extends ListActivity {
 		this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
 		this.setContentView(R.layout.list);
 		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
-		mCursor = mDb.query("bands", new String[] {"_id","title"}, null, null, null, null, "title");
+		mCursor = mDb.query("bands", new String[] {"_id","title"}, null, null, null, null, "LOWER(identifier)");
 		mAdapter = new BandsAdapter(this, android.R.layout.simple_list_item_1, mCursor, new String[] {"title"}, new int[] {android.R.id.text1});
 		this.setListAdapter(mAdapter);
 		this.getListView().setFastScrollEnabled(true);

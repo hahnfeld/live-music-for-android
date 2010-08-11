@@ -1,6 +1,5 @@
 package com.everysoft.livemusicforandroid;
 
-import java.io.IOException;
 import java.lang.reflect.Field;
 
 import org.json.JSONArray;
@@ -55,10 +54,32 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
+		
+		// Set up the activity
 		this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
 		this.setContentView(R.layout.player_list);
-		mConcertId = getIntent().getExtras().getString("concert_id");
+		
+		// Get the concert ID
+		if (savedInstanceState != null) {
+			mConcertId = savedInstanceState.getString("concert_id");
+		} else {
+			mConcertId = getIntent().getExtras().getString("concert_id");
+		}
+		
+		// Create a database handle
 		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
+		
+		// Title
+        TextView tv = (TextView) findViewById(R.id.albumtitle);
+        Cursor c = mDb.query("concerts", new String[]{ "title" }, "_id=?", new String[]{ mConcertId }, null, null, null);
+		c.moveToFirst();
+        tv.setText(c.getString(0));
+		c.close();
+
+		// Clear any playing flags
+		ContentValues cv = new ContentValues();
+		cv.put("play_icon", 0);
+		mDb.update("songs", cv, null, null);
 		
 		// Cursor for the List
 		mCursor = mDb.query("songs s, concerts c, bands b", new String[] {"s._id","s.identifier","s.title AS song_title","s.song_length","s.play_icon","b.title AS band_title"}, "s.concert_id=? AND c._id=s.concert_id AND b._id=c.band_id", new String[]{ mConcertId }, null, null, "s.identifier");
@@ -97,16 +118,15 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 					}
 				});
 		mMediaController.setEnabled(false);
-		
-		// Title
-        TextView tv = (TextView) findViewById(R.id.albumtitle);
-        Cursor c = mDb.query("concerts", new String[]{ "title" }, "_id=?", new String[]{ mConcertId }, null, null, null);
-		c.moveToFirst();
-        tv.setText(c.getString(0));
-		c.close();
-        
+		        
 		// Refresh
 		refreshIfTime();
+	}
+	
+	@Override
+	public void onSaveInstanceState(Bundle outState) {
+		outState.putString("concert_id", mConcertId);
+		super.onSaveInstanceState(outState);
 	}
 	
 	@Override
@@ -273,15 +293,8 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 			try {
 				mMediaPlayer.setDataSource("http://www.archive.org/download/" + mCursor.getString(1));
 				mMediaPlayer.prepareAsync();
-			} catch (IllegalArgumentException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			} catch (IllegalStateException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
+			} catch (Exception e) {
+        		Toast.makeText(mContext, "Unable to load remote stream.  Try again later.", Toast.LENGTH_LONG).show();
 			}
 
 			// Icon
@@ -302,18 +315,8 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 			Field ms = mMediaController.getClass().getDeclaredField("mShowing");
 			ms.setAccessible(true);
 			ms.set(mMediaController, showing);
-		} catch (SecurityException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (NoSuchFieldException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (IllegalArgumentException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (IllegalAccessException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+		} catch (Exception e) {
+			e.printStackTrace(); // This shouldn't happen; log it!
 		}
 	}
 	

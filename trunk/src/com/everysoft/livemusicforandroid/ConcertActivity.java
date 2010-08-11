@@ -38,14 +38,26 @@ public class ConcertActivity extends ListActivity {
 		super.onCreate(savedInstanceState);
 		this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
 		this.setContentView(R.layout.list);
-		mBandId = getIntent().getExtras().getString("band_id");
+		
+		if (savedInstanceState != null) {
+			mBandId = savedInstanceState.getString("band_id");
+		} else {
+			mBandId = getIntent().getExtras().getString("band_id");
+		}
+
 		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
 		mCursor = mDb.query("concerts", new String[] {"_id","title","rating"}, "band_id=?", new String[]{ mBandId }, null, null, "_id"); // sorted on insert
-		mAdapter = new SimpleCursorAdapter(this, android.R.layout.simple_list_item_2, mCursor, new String[] {"title","rating"}, new int[] {android.R.id.text1, android.R.id.text2});
+		mAdapter = new SimpleCursorAdapter(this, android.R.layout.simple_list_item_2, mCursor, new String[] {"title", "rating"}, new int[] {android.R.id.text1, android.R.id.text2});
 		this.setListAdapter(mAdapter);
 		this.getListView().setFastScrollEnabled(true);
 		
 		refreshIfTime();
+	}
+	
+	@Override
+	public void onSaveInstanceState(Bundle outState) {
+		outState.putString("band_id", mBandId);
+		super.onSaveInstanceState(outState);
 	}
 	
 	@Override
@@ -109,7 +121,7 @@ public class ConcertActivity extends ListActivity {
 		c.moveToFirst();
 		String collection = c.getString(0);
 		c.close();
-		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q=collection%3A%28"+collection+"%29+AND+mediatype%3A%28etree%29&fl[]=identifier&fl[]=avg_rating&fl[]=title&sort[]=date+desc&rows=50000&output=json");
+		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q=collection%3A%28"+collection+"%29+AND+mediatype%3A%28etree%29&fl[]=identifier&fl[]=title&fl[]=avg_rating&sort[]=date+desc&rows=50000&output=json");
 		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO concerts (band_id,identifier,title,rating) VALUES (?, ?, ?, ?)");
 		mDb.beginTransaction();
 		mDb.delete("concerts", "band_id=?", new String[]{ mBandId });
