@@ -43,5 +43,10 @@ public class LiveMusicDbOpenHelper extends SQLiteOpenHelper {
 	
 	@Override
 	public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+		if (oldVersion <= 1) {
+			db.execSQL("DROP TABLE concerts;");
+			db.execSQL("DROP TABLE bands;");
+			onCreate(db);
+		}
 	}
 }
