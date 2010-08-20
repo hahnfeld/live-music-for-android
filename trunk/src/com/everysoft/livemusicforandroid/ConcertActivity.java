@@ -19,10 +19,11 @@ import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.ListView;
+import android.widget.RatingBar;
 import android.widget.SimpleCursorAdapter;
 import android.widget.Toast;
 
-public class ConcertActivity extends ListActivity {
+public class ConcertActivity extends ListActivity implements SimpleCursorAdapter.ViewBinder {
 	
 	SQLiteDatabase mDb;
 	String mBandId;
@@ -46,9 +47,10 @@ public class ConcertActivity extends ListActivity {
 		}
 
 		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
-		mCursor = mDb.query("concerts", new String[] {"_id","title","rating"}, "band_id=?", new String[]{ mBandId }, null, null, "_id"); // sorted on insert
-		mAdapter = new SimpleCursorAdapter(this, android.R.layout.simple_list_item_2, mCursor, new String[] {"title", "rating"}, new int[] {android.R.id.text1, android.R.id.text2});
+		mCursor = mDb.query("concerts c, bands b", new String[] {"c._id","b.title || ' Live' band","'at ' || c.location location","c.concert_date","c.rating"}, "c.band_id=? and b._id = c.band_id", new String[]{ mBandId }, null, null, "c._id"); // sorted on insert
+		mAdapter = new SimpleCursorAdapter(this, R.layout.concert_list_item, mCursor, new String[] {"band", "location", "concert_date", "rating"}, new int[] {R.id.line1, R.id.line2, R.id.duration, R.id.ratingbar});
 		this.setListAdapter(mAdapter);
+		mAdapter.setViewBinder(this);
 		this.getListView().setFastScrollEnabled(true);
 		
 		refreshIfTime();
@@ -95,6 +97,18 @@ public class ConcertActivity extends ListActivity {
 		playerActivityIntent.putExtra("concert_id", ""+id);
 		this.startActivity(playerActivityIntent);
 	}
+
+	// Handle Ratings
+	@Override
+	public boolean setViewValue(View view, Cursor cursor, int columnIndex) {
+		if (view instanceof RatingBar) {
+			RatingBar ratingBar = (RatingBar) view;
+			Float rating = cursor.getFloat(columnIndex);
+			ratingBar.setRating(rating);
+	        return true;
+		}
+		return false;
+	}	
 	
 	public void refreshIfTime() {
 		Cursor c = mDb.query("concerts", new String[] { "count(*)" }, "band_id=? AND updated > datetime('now','-1 day')", new String[] { mBandId }, null, null, null);
@@ -122,7 +136,7 @@ public class ConcertActivity extends ListActivity {
 		String collection = c.getString(0);
 		c.close();
 		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q=collection%3A%28"+collection+"%29+AND+mediatype%3A%28etree%29&fl[]=identifier&fl[]=title&fl[]=avg_rating&sort[]=date+desc&rows=50000&output=json");
-		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO concerts (band_id,identifier,title,rating) VALUES (?, ?, ?, ?)");
+		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO concerts (band_id,identifier,location,concert_date,rating) VALUES (?, ?, ?, ?, ?)");
 		mDb.beginTransaction();
 		mDb.delete("concerts", "band_id=?", new String[]{ mBandId });
 		try {
@@ -131,23 +145,18 @@ public class ConcertActivity extends ListActivity {
 				JSONObject concert = concerts.getJSONObject(i);
 				stmt.bindString(1, mBandId);
 				stmt.bindString(2, concert.getString("identifier"));
-				stmt.bindString(3, concert.getString("title"));
-				if (concert.has("avg_rating")) {
-					Double stars = concert.getDouble("avg_rating");
-					if (stars < 0.5) { stmt.bindString(4, "Rating: 0/5"); }
-					else if (stars < 1.0) { stmt.bindString(4, "Rating: 0.5/5"); }
-					else if (stars < 1.5) { stmt.bindString(4, "Rating: 1/5"); }
-					else if (stars < 2.0) { stmt.bindString(4, "Rating: 1.5/5"); }
-					else if (stars < 2.5) { stmt.bindString(4, "Rating: 2/5"); }
-					else if (stars < 3.0) { stmt.bindString(4, "Rating: 2.5/5"); }
-					else if (stars < 3.5) { stmt.bindString(4, "Rating: 3/5"); }
-					else if (stars < 4.0) { stmt.bindString(4, "Rating: 3.5/5"); }
-					else if (stars < 4.5) { stmt.bindString(4, "Rating: 4/5"); }
-					else if (stars < 5.0) { stmt.bindString(4, "Rating: 4.5/5"); }
-					else { stmt.bindString(4, "Rating: 5/5"); }
+				
+				String title = concert.getString("title");
+				String[] split_title = title.split(" Live at ", 2);
+				if (split_title[1] != null && split_title[1].length() > 14) {
+					stmt.bindString(3, split_title[1].substring(0, split_title[1].length() - 14)); // location
+					stmt.bindString(4, split_title[1].substring(split_title[1].length() - 10)); // date
 				}
-				else {
-					stmt.bindString(4, "Not Rated Yet");
+				
+				if (concert.has("avg_rating")) {
+					stmt.bindString(5, concert.getString("avg_rating"));
+				} else {
+					stmt.bindString(5, "0.0");
 				}
 				stmt.execute();
 			}

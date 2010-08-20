@@ -71,7 +71,7 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 		
 		// Title
         TextView tv = (TextView) findViewById(R.id.albumtitle);
-        Cursor c = mDb.query("concerts", new String[]{ "title" }, "_id=?", new String[]{ mConcertId }, null, null, null);
+        Cursor c = mDb.query("concerts c, bands b", new String[]{ "b.title || ' Live at ' || c.location || ' on ' || c.concert_date title" }, "c._id=? and b._id = c.band_id", new String[]{ mConcertId }, null, null, null);
 		c.moveToFirst();
         tv.setText(c.getString(0));
 		c.close();
@@ -87,7 +87,7 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 		mCurrentSongPosition = 0;
 		
 		// List Adapter
-		mAdapter = new SimpleCursorAdapter(this, R.layout.track_list_item, mCursor, new String[] {"song_title","song_length","play_icon","band_title"}, new int[] {R.id.line1, R.id.duration, R.id.play_indicator, R.id.line2});
+		mAdapter = new SimpleCursorAdapter(this, R.layout.player_list_item, mCursor, new String[] {"song_title","song_length","play_icon","band_title"}, new int[] {R.id.line1, R.id.duration, R.id.play_indicator, R.id.line2});
 		setListAdapter(mAdapter);
 		mAdapter.setViewBinder(this);
 
