@@ -24,7 +24,8 @@ public class LiveMusicDbOpenHelper extends SQLiteOpenHelper {
 				"_id INTEGER PRIMARY KEY AUTOINCREMENT," +
 				"band_id INTEGER NOT NULL," +
 				"identifier TEXT NOT NULL," +
-				"title TEXT NOT NULL," +
+				"location STRING NOT NULL DEFAULT 'Unknown'," +
+				"concert_date STRING NOT NULL DEFAULT 'Unknown'," +
 				"rating STRING NOT NULL," +
 				"updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
 				"FOREIGN KEY (band_id) REFERENCES bands(_id) ON DELETE CASCADE" +
@@ -46,6 +47,12 @@ public class LiveMusicDbOpenHelper extends SQLiteOpenHelper {
 		if (oldVersion <= 1) {
 			db.execSQL("DROP TABLE concerts;");
 			db.execSQL("DROP TABLE bands;");
+			onCreate(db);
+		}
+		else if (oldVersion == 2) {
+			db.execSQL("DROP TABLE concerts;");
+			db.execSQL("DROP TABLE bands;");
+			db.execSQL("DROP TABLE songs;");
 			onCreate(db);
 		}
 	}
