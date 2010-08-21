@@ -6,12 +6,14 @@ import org.json.JSONObject;
 import android.app.AlertDialog;
 import android.app.ListActivity;
 import android.app.ProgressDialog;
+import android.app.SearchManager;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteStatement;
 import android.media.AudioManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.view.Menu;
@@ -19,21 +21,24 @@ import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.ListView;
+import android.widget.AbsListView;
 import android.widget.RatingBar;
 import android.widget.SimpleCursorAdapter;
 import android.widget.Toast;
 
-public class ConcertActivity extends ListActivity implements SimpleCursorAdapter.ViewBinder {
+public class ConcertSearchActivity extends ListActivity implements SimpleCursorAdapter.ViewBinder, AbsListView.OnScrollListener {
 	
 	SQLiteDatabase mDb;
-	String mBandId;
+	String mQueryString;
 	ProgressDialog mDialog;
 	Cursor mCursor;
 	SimpleCursorAdapter mAdapter;
 	final Handler mHandler = new Handler();
 	String mDeepError;
 	Context mContext = this;
-
+	int mPageNum = 1;
+	int mLastTotalCount = 0;
+	
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
@@ -41,24 +46,24 @@ public class ConcertActivity extends ListActivity implements SimpleCursorAdapter
 		this.setContentView(R.layout.list);
 		
 		if (savedInstanceState != null) {
-			mBandId = savedInstanceState.getString("band_id");
+			mQueryString = savedInstanceState.getString("query_string");
 		} else {
-			mBandId = getIntent().getExtras().getString("band_id");
+			mQueryString = getIntent().getExtras().getString(SearchManager.QUERY);
 		}
 
 		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
-		mCursor = mDb.query("concerts c, bands b", new String[] {"c._id","b.title || ' Live' band","'at ' || c.location location","c.concert_date","c.rating"}, "c.band_id=? and b._id = c.band_id", new String[]{ mBandId }, null, null, "c._id"); // sorted on insert
+		mCursor = mDb.query("concerts c, bands b", new String[] {"c._id","b.title || ' Live' band","'at ' || c.location location","c.concert_date","c.rating"}, "c.search_flag=1 and b._id = c.band_id", null, null, null, "c._id"); // sorted on insert
 		mAdapter = new SimpleCursorAdapter(this, R.layout.concert_list_item, mCursor, new String[] {"band", "location", "concert_date", "rating"}, new int[] {R.id.line1, R.id.line2, R.id.duration, R.id.ratingbar});
 		this.setListAdapter(mAdapter);
 		mAdapter.setViewBinder(this);
-		this.getListView().setFastScrollEnabled(true);
+		getListView().setOnScrollListener(this);
 		
-		refreshIfTime();
+		resetSearch();
 	}
 	
 	@Override
 	public void onSaveInstanceState(Bundle outState) {
-		outState.putString("band_id", mBandId);
+		outState.putString("query_string", mQueryString);
 		super.onSaveInstanceState(outState);
 	}
 	
@@ -85,7 +90,7 @@ public class ConcertActivity extends ListActivity implements SimpleCursorAdapter
 			builder.create().show();
 			return true;
 		case R.id.refresh:
-			refreshConcerts();
+			resetSearch();
 		default:
 	        return super.onOptionsItemSelected(item);
 		}
@@ -109,50 +114,54 @@ public class ConcertActivity extends ListActivity implements SimpleCursorAdapter
 		}
 		return false;
 	}	
-	
-	public void refreshIfTime() {
-		Cursor c = mDb.query("concerts", new String[] { "count(*)" }, "band_id=? AND updated > datetime('now','-1 day')", new String[] { mBandId }, null, null, null);
-		c.moveToFirst();
-		if (c.getInt(0) == 0) {
-			refreshConcerts();
+
+	@Override
+    public void onScroll(AbsListView view, int firstVisible, int visibleCount, int totalCount) {
+		if (totalCount >= 100 && (firstVisible + visibleCount) >= totalCount && totalCount != mLastTotalCount) {
+			mLastTotalCount = totalCount;
+			getMoreResults();
 		}
-		c.close();
+	}
+
+	@Override
+	public void onScrollStateChanged(AbsListView view, int scrollState) {
+		// Do nothing!
 	}
 	
-	public void refreshConcerts() {
+	public void resetSearch() {
+		mDb.delete("concerts", "search_flag=1", null);
+		mPageNum = 1;
+		getMoreResults();
+	}
+	
+	public void getMoreResults() {
 		mDialog = ProgressDialog.show(this, "", "Updating. Please wait...", true);
         Thread t = new Thread() {
             public void run() {
-                getConcertsFromJSON();
-                mHandler.post(mFinishRefreshConcerts);
+                getSearchResultsFromJSON();
+                mHandler.post(mGotMoreResults);
             }
         };
         t.start();
 	}
 	
-	private void getConcertsFromJSON() {
-		Cursor c = mDb.query("bands", new String[] { "identifier" }, "_id=?", new String[] { mBandId }, null, null, null);
-		c.moveToFirst();
-		String collection = c.getString(0);
-		c.close();
-		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q=collection%3A%28"+collection+"%29+AND+mediatype%3A%28etree%29&fl[]=identifier&fl[]=title&fl[]=avg_rating&sort[]=date+desc&rows=50000&output=json");
-		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO concerts (band_id,identifier,location,concert_date,rating) VALUES (?, ?, ?, ?, ?)");
+	private void getSearchResultsFromJSON() {
+		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q="+ Uri.encode(mQueryString) +"+AND+mediatype%3A%28etree%29&fl[]=collection,identifier,title,avg_rating&rows=100&page=" + mPageNum + "&output=json");
+		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO concerts (band_id,identifier,location,concert_date,rating,search_flag) SELECT _id, ?, ?, ?, ?, 1 FROM bands where identifier=?");
 		mDb.beginTransaction();
-		mDb.delete("concerts", "band_id=?", new String[]{ mBandId });
 		try {
 			JSONArray concerts = retriever.getJSON().getJSONObject("response").getJSONArray("docs");
 			for (int i=0; i<concerts.length(); i++) {
 				JSONObject concert = concerts.getJSONObject(i);
-				stmt.bindString(1, mBandId);
-				stmt.bindString(2, concert.getString("identifier"));
+				stmt.bindString(1, concert.getString("identifier"));
 				
 				String title = concert.getString("title");
 				int live_at_index = title.indexOf("Live at");
 				if (live_at_index >= 0) {
 					String loc_date = title.substring(live_at_index + 8);
 					if (loc_date.length() > 14 && loc_date.lastIndexOf("on") == loc_date.length() - 13) {
-						stmt.bindString(3, loc_date.substring(0, loc_date.length() - 14)); // location
-						stmt.bindString(4, loc_date.substring(loc_date.length() - 10)); // date						
+						stmt.bindString(2, loc_date.substring(0, loc_date.length() - 14)); // location
+						stmt.bindString(3, loc_date.substring(loc_date.length() - 10)); // date						
 					}
 					else {
 						continue;
@@ -163,22 +172,27 @@ public class ConcertActivity extends ListActivity implements SimpleCursorAdapter
 				}
 				
 				if (concert.has("avg_rating")) {
-					stmt.bindString(5, concert.getString("avg_rating"));
+					stmt.bindString(4, concert.getString("avg_rating"));
 				} else {
-					stmt.bindString(5, "0.0");
+					stmt.bindString(4, "0.0");
 				}
+				
+				stmt.bindString(5, concert.getJSONArray("collection").getString(0));
+				
 				stmt.execute();
 			}
 			mDb.setTransactionSuccessful();
+			mPageNum++;
 			mDeepError = null;
 		} catch (Exception e) {
 			mDeepError = "Cannot retrieve data from archive.org.  Check your connection!";
 			e.printStackTrace();
 		}
 		mDb.endTransaction();
+		stmt.close();
 	}
 	
-	final Runnable mFinishRefreshConcerts = new Runnable() {
+	final Runnable mGotMoreResults = new Runnable() {
         public void run() {
         	if (mDeepError != null) {
         		Toast.makeText(mContext, mDeepError, Toast.LENGTH_LONG).show();
