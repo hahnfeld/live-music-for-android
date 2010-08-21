@@ -27,6 +27,7 @@ public class LiveMusicDbOpenHelper extends SQLiteOpenHelper {
 				"location STRING NOT NULL DEFAULT 'Unknown'," +
 				"concert_date STRING NOT NULL DEFAULT 'Unknown'," +
 				"rating STRING NOT NULL," +
+				"search_flag BOOLEAN NOT NULL DEFAULT 0," +
 				"updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
 				"FOREIGN KEY (band_id) REFERENCES bands(_id) ON DELETE CASCADE" +
 			");");
