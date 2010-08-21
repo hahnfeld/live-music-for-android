@@ -19,6 +19,7 @@ import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.AlphabetIndexer;
+import android.widget.FilterQueryProvider;
 import android.widget.ListView;
 import android.widget.SectionIndexer;
 import android.widget.SimpleCursorAdapter;
@@ -44,6 +45,14 @@ public class BandActivity extends ListActivity {
 		mAdapter = new BandsAdapter(this, android.R.layout.simple_list_item_1, mCursor, new String[] {"title"}, new int[] {android.R.id.text1});
 		this.setListAdapter(mAdapter);
 		this.getListView().setFastScrollEnabled(true);
+		
+		mAdapter.setFilterQueryProvider(new FilterQueryProvider() {
+			@Override
+			public Cursor runQuery(CharSequence constraint) {
+				return mDb.query("bands", new String[] {"_id","title"}, "title LIKE '%' || ? || '%'", new String[] { (String) constraint }, null, null, "LOWER(identifier)");
+			}
+		});
+		this.getListView().setTextFilterEnabled(true);
 		
 		refreshIfTime();
 	}

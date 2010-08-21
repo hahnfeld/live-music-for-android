@@ -3,7 +3,6 @@ package com.everysoft.livemusicforandroid;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import android.app.AlertDialog;
 import android.app.ListActivity;
 import android.app.ProgressDialog;
 import android.app.SearchManager;
@@ -38,20 +37,29 @@ public class ConcertSearchActivity extends ListActivity implements SimpleCursorA
 	Context mContext = this;
 	int mPageNum = 1;
 	int mLastTotalCount = 0;
+	String mSort = "";
 	
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 		this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
 		this.setContentView(R.layout.list);
+		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
 		
 		if (savedInstanceState != null) {
 			mQueryString = savedInstanceState.getString("query_string");
+		} else if (getIntent().getExtras().containsKey(SearchManager.QUERY)) {
+			mQueryString = getIntent().getStringExtra(SearchManager.QUERY);
+		} else if (getIntent().getExtras().containsKey(SearchManager.EXTRA_DATA_KEY)) {
+			SQLiteStatement stmt = mDb.compileStatement("SELECT identifier FROM bands WHERE _id=?");
+			stmt.bindString(1, getIntent().getStringExtra(SearchManager.EXTRA_DATA_KEY));
+			mQueryString = "collection:(" + stmt.simpleQueryForString() + ")";
+			stmt.close();
+			mSort = "date+desc"; // if we're searching a collection, sort by date
 		} else {
-			mQueryString = getIntent().getExtras().getString(SearchManager.QUERY);
+			mQueryString = "";
 		}
-
-		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
+		
 		mCursor = mDb.query("concerts c, bands b", new String[] {"c._id","b.title || ' Live' band","'at ' || c.location location","c.concert_date","c.rating"}, "c.search_flag=1 and b._id = c.band_id", null, null, null, "c._id"); // sorted on insert
 		mAdapter = new SimpleCursorAdapter(this, R.layout.concert_list_item, mCursor, new String[] {"band", "location", "concert_date", "rating"}, new int[] {R.id.line1, R.id.line2, R.id.duration, R.id.ratingbar});
 		this.setListAdapter(mAdapter);
@@ -84,11 +92,6 @@ public class ConcertSearchActivity extends ListActivity implements SimpleCursorA
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
 		switch (item.getItemId()) {
-		case R.id.about:
-			AlertDialog.Builder builder = new AlertDialog.Builder(this);
-			builder.setMessage(R.string.about_message);
-			builder.create().show();
-			return true;
 		case R.id.refresh:
 			resetSearch();
 		default:
@@ -135,7 +138,7 @@ public class ConcertSearchActivity extends ListActivity implements SimpleCursorA
 	}
 	
 	public void getMoreResults() {
-		mDialog = ProgressDialog.show(this, "", "Updating. Please wait...", true);
+		mDialog = ProgressDialog.show(this, "", "Getting search results...", true);
         Thread t = new Thread() {
             public void run() {
                 getSearchResultsFromJSON();
@@ -146,7 +149,7 @@ public class ConcertSearchActivity extends ListActivity implements SimpleCursorA
 	}
 	
 	private void getSearchResultsFromJSON() {
-		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q="+ Uri.encode(mQueryString) +"+AND+mediatype%3A%28etree%29&fl[]=collection,identifier,title,avg_rating&rows=100&page=" + mPageNum + "&output=json");
+		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q="+ Uri.encode(mQueryString) +"+AND+mediatype%3A%28etree%29&fl[]=collection,identifier,title,avg_rating&rows=100&page=" + mPageNum + "&sort[]=" + mSort + "&output=json");
 		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO concerts (band_id,identifier,location,concert_date,rating,search_flag) SELECT _id, ?, ?, ?, ?, 1 FROM bands where identifier=?");
 		mDb.beginTransaction();
 		try {

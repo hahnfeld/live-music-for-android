@@ -3,7 +3,6 @@ package com.everysoft.livemusicforandroid;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import android.app.AlertDialog;
 import android.app.ListActivity;
 import android.app.ProgressDialog;
 import android.content.Context;
@@ -47,7 +46,7 @@ public class ConcertActivity extends ListActivity implements SimpleCursorAdapter
 		}
 
 		mDb = new LiveMusicDbOpenHelper(this).getWritableDatabase();
-		mCursor = mDb.query("concerts c, bands b", new String[] {"c._id","b.title || ' Live' band","'at ' || c.location location","c.concert_date","c.rating"}, "c.band_id=? and b._id = c.band_id", new String[]{ mBandId }, null, null, "c._id"); // sorted on insert
+		mCursor = mDb.query("concerts c, bands b", new String[] {"c._id","b.title || ' Live' band","'at ' || c.location location","c.concert_date","c.rating"}, "c.band_id=? and c.search_flag = 0 and b._id = c.band_id", new String[]{ mBandId }, null, null, "c._id"); // sorted on insert
 		mAdapter = new SimpleCursorAdapter(this, R.layout.concert_list_item, mCursor, new String[] {"band", "location", "concert_date", "rating"}, new int[] {R.id.line1, R.id.line2, R.id.duration, R.id.ratingbar});
 		this.setListAdapter(mAdapter);
 		mAdapter.setViewBinder(this);
@@ -79,11 +78,6 @@ public class ConcertActivity extends ListActivity implements SimpleCursorAdapter
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
 		switch (item.getItemId()) {
-		case R.id.about:
-			AlertDialog.Builder builder = new AlertDialog.Builder(this);
-			builder.setMessage(R.string.about_message);
-			builder.create().show();
-			return true;
 		case R.id.refresh:
 			refreshConcerts();
 		default:
@@ -111,7 +105,7 @@ public class ConcertActivity extends ListActivity implements SimpleCursorAdapter
 	}	
 	
 	public void refreshIfTime() {
-		Cursor c = mDb.query("concerts", new String[] { "count(*)" }, "band_id=? AND updated > datetime('now','-1 day')", new String[] { mBandId }, null, null, null);
+		Cursor c = mDb.query("concerts", new String[] { "count(*)" }, "band_id=? AND search_flag=0 AND updated > datetime('now','-1 day')", new String[] { mBandId }, null, null, null);
 		c.moveToFirst();
 		if (c.getInt(0) == 0) {
 			refreshConcerts();
@@ -138,7 +132,7 @@ public class ConcertActivity extends ListActivity implements SimpleCursorAdapter
 		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/advancedsearch.php?q=collection%3A%28"+collection+"%29+AND+mediatype%3A%28etree%29&fl[]=identifier&fl[]=title&fl[]=avg_rating&sort[]=date+desc&rows=50000&output=json");
 		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO concerts (band_id,identifier,location,concert_date,rating) VALUES (?, ?, ?, ?, ?)");
 		mDb.beginTransaction();
-		mDb.delete("concerts", "band_id=?", new String[]{ mBandId });
+		mDb.delete("concerts", "band_id=? and search_flag=0", new String[]{ mBandId });
 		try {
 			JSONArray concerts = retriever.getJSON().getJSONObject("response").getJSONArray("docs");
 			for (int i=0; i<concerts.length(); i++) {

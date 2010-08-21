@@ -5,11 +5,11 @@ import java.lang.reflect.Field;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import android.app.AlertDialog;
 import android.app.ListActivity;
 import android.app.ProgressDialog;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteStatement;
@@ -19,6 +19,7 @@ import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.MediaPlayer.OnCompletionListener;
 import android.media.MediaPlayer.OnPreparedListener;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.view.Menu;
@@ -153,13 +154,11 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
 	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
 		switch (item.getItemId()) {
-		case R.id.about:
-			AlertDialog.Builder builder = new AlertDialog.Builder(this);
-			builder.setMessage(R.string.about_message);
-			builder.create().show();
-			return true;
 		case R.id.refresh:
 			refreshSongs();
+		case R.id.details:
+			Intent browserIntent = new Intent("android.intent.action.VIEW", Uri.parse("http://www.archive.org/details/"+getConcertIdentifier()));
+			startActivity(browserIntent);
 		default:
 	        return super.onOptionsItemSelected(item);
 		}
@@ -231,12 +230,16 @@ public class PlayerActivity extends ListActivity implements OnPreparedListener, 
         t.start();
 	}
 	
+	private String getConcertIdentifier() {
+		SQLiteStatement stmt = mDb.compileStatement("SELECT identifier FROM concerts WHERE _id=?");
+		stmt.bindString(1, mConcertId);
+		String identifier = stmt.simpleQueryForString();
+		stmt.close();
+		return identifier;		
+	}
+	
 	private void getSongsFromJSON() {
-		Cursor c = mDb.query("concerts", new String[] { "identifier" }, "_id=?", new String[] { mConcertId }, null, null, null);
-		c.moveToFirst();
-		String concert = c.getString(0);
-		c.close();
-		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/details/"+concert+"?output=json");
+		JSONRetriever retriever = new JSONRetriever("http://www.archive.org/details/"+getConcertIdentifier()+"?output=json");
 		SQLiteStatement stmt = mDb.compileStatement("INSERT INTO songs (concert_id,identifier,title,song_length) VALUES (?, ?, ?, ?)");
 		mDb.beginTransaction();
 		mDb.delete("songs", "concert_id=?", new String[]{ mConcertId });
