@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteOpenHelper;
 
 public class LiveMusicDbOpenHelper extends SQLiteOpenHelper {
 	static String name = "livemusic"; // DB name
-	static int version = 2; // DB Version
+	static int version = 3; // DB Version
 	
 	public LiveMusicDbOpenHelper(Context context) {
 		super(context, name, null, version);
@@ -50,7 +50,7 @@ public class LiveMusicDbOpenHelper extends SQLiteOpenHelper {
 			db.execSQL("DROP TABLE bands;");
 			onCreate(db);
 		}
-		else if (oldVersion == 2) {
+		else if (oldVersion <= 3) {
 			db.execSQL("DROP TABLE concerts;");
 			db.execSQL("DROP TABLE bands;");
 			db.execSQL("DROP TABLE songs;");
