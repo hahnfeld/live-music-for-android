@@ -1,0 +1,1 @@
+Live Music for Android is a free, open source client for the Live Music Archive at archive.org.
